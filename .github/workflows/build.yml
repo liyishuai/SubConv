@@ -69,6 +69,8 @@ jobs:
           mkdir output
           mkdir output/mainpage
           cp api${{ matrix.os == 'windows-latest' && '.exe' || '.bin' }} output/api${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          cp config.yaml.example output/config.yaml.example
+          cp -r template output/template
           cp -r mainpage/dist output/mainpage/dist
 
       - name: Upload Artifacts
