@@ -12,7 +12,8 @@ on:
       - 'modules/**'
       - 'static/**'
       - 'api.py'
-      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
   workflow_dispatch:
 
 permissions:
