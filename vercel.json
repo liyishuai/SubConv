@@ -28,6 +28,10 @@
       "dest": "/api.py"
     },
     {
+      "src": "/config(.*)",
+      "dest": "/api.py"
+    },
+    {
       "src": "/(.*)",
       "dest": "/$1"
     }
