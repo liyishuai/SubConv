@@ -1,6 +1,6 @@
-import os
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -15,8 +15,6 @@ from . import packer
 from . import subscription
 from .converter import ConvertsV2Ray
 
-DISALLOW_ROBOTS = bool(eval(os.environ.get("DISALLOW_ROBOTS", "False")))
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -26,22 +24,22 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-STATIC_DIR = "mainpage/dist"
-if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+STATIC_DIR = Path("mainpage/dist")
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
 async def mainpage():
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.isfile(index_path):
+    index_path = STATIC_DIR / "index.html"
+    if index_path.is_file():
         return FileResponse(index_path)
     return Response(status_code=404)
 
 
 @app.get("/robots.txt")
 async def robots():
-    if DISALLOW_ROBOTS:
+    if config.get_app_config().DISALLOW_ROBOTS:
         return Response(content="User-agent: *\nDisallow: /", media_type="text/plain")
     return Response(status_code=404)
 
@@ -63,10 +61,8 @@ async def provider(request: Request):
             status_code=400, detail="Missing required query parameter: url"
         )
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers={"User-Agent": "v2rayn"})
-        if resp.status_code < 200 or resp.status_code >= 400:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await _fetch_remote_response(client, url, "v2rayn")
         result = await subscription.parseSubs(resp.text)
     return Response(content=result, headers=headers)
 
@@ -105,37 +101,23 @@ async def sub(request: Request):
 
     user_agent = request.headers.get("User-Agent", "v2rayn")
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         headers = {"Content-Type": "text/yaml;charset=utf-8"}
-        if url is not None and len(url) == 1:
-            resp = await client.head(url[0], headers={"User-Agent": user_agent})
-            if resp.status_code < 200 or resp.status_code >= 400:
-                raise HTTPException(status_code=resp.status_code, detail=resp.text)
-            elif resp.status_code >= 300 and resp.status_code < 400:
-                while resp.status_code >= 300 and resp.status_code < 400:
-                    url[0] = resp.headers["Location"]
-                    resp = await client.head(url[0], headers={"User-Agent": user_agent})
-                    if resp.status_code < 200 or resp.status_code >= 400:
-                        raise HTTPException(
-                            status_code=resp.status_code, detail=resp.text
-                        )
-            originalHeaders = resp.headers
-            if "subscription-userinfo" in originalHeaders:
-                headers["subscription-userinfo"] = originalHeaders[
-                    "subscription-userinfo"
-                ]
-            if "Content-Disposition" in originalHeaders:
-                headers["Content-Disposition"] = originalHeaders[
-                    "Content-Disposition"
-                ].replace("attachment", "inline")
-
         content: list[str] | None = []
         if url is not None:
             for i in range(len(url)):
-                respText = (
-                    await client.get(url[i], headers={"User-Agent": "v2rayn"})
-                ).text
-                content.append(await subscription.parseSubs(respText))
+                resp = await _fetch_remote_response(client, url[i], user_agent)
+                content.append(await subscription.parseSubs(resp.text))
+                if len(url) == 1:
+                    original_headers = resp.headers
+                    if "subscription-userinfo" in original_headers:
+                        headers["subscription-userinfo"] = original_headers[
+                            "subscription-userinfo"
+                        ]
+                    if "Content-Disposition" in original_headers:
+                        headers["Content-Disposition"] = original_headers[
+                            "Content-Disposition"
+                        ].replace("attachment", "inline")
                 url[i] = "{}provider?{}".format(
                     str(request.base_url), urlencode({"url": url[i]})
                 )
@@ -215,8 +197,8 @@ async def proxy(request: Request, url: str):
 
 @app.get("/{path:path}")
 async def index(path: str):
-    static_path = os.path.join(STATIC_DIR, path)
-    if os.path.isfile(static_path):
+    static_path = _resolve_static_path(path)
+    if static_path is not None and static_path.is_file():
         return FileResponse(static_path)
     raise HTTPException(status_code=404, detail="Not Found")
 
@@ -226,6 +208,7 @@ def _split_sources(source: str) -> tuple[list[str] | None, str | None]:
     standalone_urls: list[str] = []
 
     for item in filter(None, re.split(r"[|\n]", source)):
+        item = item.strip()
         if (
             item.startswith("http://") or item.startswith("https://")
         ) and not item.startswith("https://t.me/"):
@@ -255,3 +238,44 @@ async def _load_template(template_name: str) -> config.TemplateConfig:
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _resolve_static_path(path: str) -> Path | None:
+    try:
+        static_root = STATIC_DIR.resolve()
+        requested_path = (static_root / path).resolve()
+        requested_path.relative_to(static_root)
+    except ValueError:
+        return None
+
+    return requested_path
+
+
+def _validate_remote_url(url: str) -> str:
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid upstream URL: {url}") from exc
+
+    if parsed.scheme not in {"http", "https"} or parsed.host is None:
+        raise HTTPException(status_code=400, detail=f"Invalid upstream URL: {url}")
+
+    return str(parsed)
+
+
+async def _fetch_remote_response(
+    client: httpx.AsyncClient, url: str, user_agent: str
+) -> httpx.Response:
+    try:
+        resp = await client.get(
+            _validate_remote_url(url), headers={"User-Agent": user_agent}
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch upstream URL: {exc}"
+        ) from exc
+
+    if resp.status_code < 200 or resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return resp
