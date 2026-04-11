@@ -27,7 +27,7 @@ features:
   - title: 默认代理 rule-provider
     details: 默认会代理 rule-provider，防止因无法访问 GitHub 而导致的规则更新失败
   - title: 易于定制
-    details: 您可以通过修改配置文件来自定义规则集
+    details: 您可以通过修改模板文件来自定义规则集和代理组
   - title: 支持多个机场
     details: 它支持多个机场
   - title: 支持多种协议

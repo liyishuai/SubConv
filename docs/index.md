@@ -27,7 +27,7 @@ features:
   - title: Proxy rule-provider by default
     details: Rule-provider will be proxied by default to prevent rule update failure due to inability to access GitHub
   - title: Easy to Customize
-    details: You can customize the rule sets by modifying the config file
+    details: You can customize the rule sets and proxy groups by modifying the template files
   - title: Support Multiple Airports
     details: It supports multiple airports
   - title: Support Multiple Protocols
