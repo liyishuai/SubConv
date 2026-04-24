@@ -125,6 +125,10 @@ CUSTOM_PROXY_GROUP:
   type: select
   manual: true
   rule: false
+- name: 🤖 AI节点
+  type: select
+  rule: false
+  regex: (?i:(?:\bAI\b|人工智能|OpenAI|ChatGPT|GPT|Claude|Gemini|Bard|Copilot|Perplexity|Poe|Grok))
 - name: 🔯 故障转移
   type: fallback
   rule: false
